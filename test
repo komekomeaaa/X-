@@ -1,0 +1,103 @@
+import os
+import json
+import random
+import feedparser
+import tweepy
+from google.generativeai import configure, GenerativeModel
+
+# --- 環境変数からAPIキーを読み込み ---
+try:
+    GEMINI_API_KEY = os.environ['GEMINI_API_KEY']
+    X_API_KEY = os.environ['X_API_KEY']
+    X_API_SECRET_KEY = os.environ['X_API_SECRET_KEY']
+    X_ACCESS_TOKEN = os.environ['X_ACCESS_TOKEN']
+    X_ACCESS_TOKEN_SECRET = os.environ['X_ACCESS_TOKEN_SECRET']
+except KeyError as e:
+    print(f"エラー: 環境変数 {e} が設定されていません。")
+    exit(1)
+
+# --- 設定ファイルを読み込み ---
+try:
+    with open('config.json', 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    PERSONA = config['persona']
+    SOURCES = config['sources']
+except FileNotFoundError:
+    print("エラー: config.json が見つかりません。")
+    exit(1)
+
+# --- Gemini APIのセットアップ ---
+configure(api_key=GEMINI_API_KEY)
+model = GenerativeModel('gemini-2.5-flash')
+
+# --- X (Twitter) APIのセットアップ ---
+client = tweepy.Client(
+    consumer_key=X_API_KEY,
+    consumer_secret=X_API_SECRET_KEY,
+    access_token=X_ACCESS_TOKEN,
+    access_token_secret=X_ACCESS_TOKEN_SECRET
+)
+
+def get_latest_article_from_rss(rss_url):
+    """RSSフィードから最新の記事のタイトルとリンクを取得"""
+    feed = feedparser.parse(rss_url)
+    if not feed.entries:
+        return None, None
+    latest_entry = feed.entries[0]
+    return latest_entry.title, latest_entry.link
+
+def generate_post_text(persona, article_title, article_link):
+    """Geminiを使って投稿文を生成"""
+    prompt = f"""
+        {persona}
+
+        上記のペルソナに基づき、以下の記事の内容を要約し、X(Twitter)に投稿するためのユニークで魅力的な投稿文を140字以内で作成してください。
+        投稿には絵文字を効果的に使用し、読者のエンゲージメントを高める工夫をしてください。
+        最後に記事へのリンクを必ず含めてください。
+
+        記事タイトル: {article_title}
+        記事リンク: {article_link}
+    """
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        print(f"Gemini APIでの生成中にエラー: {e}")
+        return None
+
+def post_to_x(text):
+    """Xに投稿"""
+    try:
+        client.create_tweet(text=text)
+        print("投稿に成功しました。")
+        print(f"内容: \n{text}")
+    except Exception as e:
+        print(f"Xへの投稿中にエラー: {e}")
+
+def main():
+    """メインの処理"""
+    if not SOURCES:
+        print("情報ソースが設定されていません。")
+        return
+
+    # ランダムな情報ソースを選択
+    source_url = random.choice(SOURCES)
+    print(f"選択されたソース: {source_url}")
+
+    # RSSから最新記事を取得 (RSS以外の場合は別途処理が必要)
+    title, link = get_latest_article_from_rss(source_url)
+    if not title:
+        print(f"記事が見つかりませんでした: {source_url}")
+        return
+    
+    print(f"取得した記事: {title}")
+
+    # 投稿文を生成
+    post_text = generate_post_text(PERSONA, title, link)
+
+    if post_text:
+        # Xに投稿
+        post_to_x(post_text)
+
+if __name__ == "__main__":
+    main()
